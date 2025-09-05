@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  scim-client:
+    build: .
+    container_name: scim-client
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"  # Only bind to localhost
+    environment:
+      # Environment mode
+      - ENVIRONMENT=PROD
+      
+      # Keycloak settings
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-https://auth.example.com}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-example}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-example-scim-client}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      
+      # SCIM endpoint settings
+      - SCIM_ENDPOINT_URL=${SCIM_ENDPOINT_URL}
+      - SCIM_BEARER_TOKEN=${SCIM_BEARER_TOKEN}
+      - SCIM_VERIFY_SSL=${SCIM_VERIFY_SSL:-false}
+      
+      # vCenter filtering (optional)
+      - VCENTER_NAME=${VCENTER_NAME}
+      - VCENTER_NAME_ATTRIBUTE=${VCENTER_NAME_ATTRIBUTE:-vcenter_name}
+      
+      # Sync settings
+      - SYNC_INTERVAL_MINUTES=${SYNC_INTERVAL_MINUTES:-60}
+      - SYNC_ENABLED=${SYNC_ENABLED:-true}
+      - SYNC_DELETE_USERS=${SYNC_DELETE_USERS:-false}
+      
+      # API settings
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_PREFIX=/api
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Optional: Mount logs directory
+    volumes:
+      - ./logs:/app/logs
+    
+    # Resource limits (optional, adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+# Optional: Add a network if you want isolation
+networks:
+  default:
+    name: scim-network
+    driver: bridge

@@ -1,0 +1,37 @@
+[Unit]
+Description=SCIM Client for Keycloak to vCenter sync
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=scim-client
+Group=scim-client
+WorkingDirectory=/opt/scim-client
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="ENVIRONMENT=PROD"
+Environment="UV_CACHE_DIR=/opt/scim-client/.cache/uv"
+Environment="HOME=/opt/scim-client"
+EnvironmentFile=-/etc/scim-client/.env.PROD
+ExecStart=/bin/sh -c 'exec $(command -v uv || echo /usr/local/bin/uv) run python -m src.main'
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/scim-client /opt/scim-client/.cache
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+# Resource limits
+LimitNOFILE=4096
+TasksMax=10
+
+[Install]
+WantedBy=multi-user.target
