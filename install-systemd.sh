@@ -80,19 +80,15 @@ fi
 # Create symlink for environment file
 ln -sf "$ENV_DIR/.env.PROD" "$INSTALL_DIR/.env.PROD"
 
-echo -e "${YELLOW}Step 6: Installing Python dependencies...${NC}"
-cd "$INSTALL_DIR"
-"$UV_BIN" sync
-
-echo -e "${YELLOW}Step 7: Setting permissions...${NC}"
+echo -e "${YELLOW}Step 6: Setting permissions...${NC}"
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_DIR"
 chmod -R 755 "$INSTALL_DIR"
 
-echo -e "${YELLOW}Step 8: Installing systemd service...${NC}"
+echo -e "${YELLOW}Step 7: Installing systemd service...${NC}"
 cp "$SCRIPT_DIR/scim-client.service" /etc/systemd/system/
 systemctl daemon-reload
 
-echo -e "${YELLOW}Step 9: Enabling service...${NC}"
+echo -e "${YELLOW}Step 8: Enabling service...${NC}"
 systemctl enable scim-client.service
 
 echo -e "${GREEN}Installation complete!${NC}"
