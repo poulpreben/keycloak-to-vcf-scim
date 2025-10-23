@@ -101,19 +101,32 @@ class SyncService:
         try:
             # Get filtered groups from Keycloak (only subgroups)
             kc_groups, parent_group_map = await self._get_filtered_groups_with_subgroups()
-            
+
             # Get unique users from all filtered groups (including parent for user collection)
             all_groups_for_users = list(kc_groups) + list(parent_group_map.values())
             kc_users = await self._get_users_from_groups(all_groups_for_users)
-            
+
             # Get existing users in SCIM endpoint with pagination
             existing_users_list = await self.scim_client.list_all_users()
             existing_usernames = {user.get('userName') for user in existing_users_list}
-            
+
+            # Get existing groups from SCIM
+            existing_groups_list = await self.scim_client.list_all_groups()
+            existing_groups_map = {g.get('displayName'): g for g in existing_groups_list}
+
+            # Track which groups exist in Keycloak
+            synced_group_names = set()
+            for kc_group in kc_groups:
+                parent_group = parent_group_map.get(kc_group.id)
+                display_name = f"{self.settings.keycloak_realm}-{parent_group.name if parent_group else 'unknown'}-{kc_group.name}"
+                synced_group_names.add(display_name)
+
             # Determine sync actions
             users_to_create = []
             users_to_update = []
-            
+            users_to_delete = []
+            groups_to_delete = []
+
             for kc_user in kc_users:
                 if kc_user.username not in existing_usernames:
                     users_to_create.append({
@@ -131,21 +144,46 @@ class SyncService:
                         "lastName": kc_user.lastName,
                         "enabled": kc_user.enabled
                     })
-                    
+
+            # Determine users to delete if enabled
+            if self.settings.sync_delete_users:
+                kc_usernames = {u.username for u in kc_users}
+                for existing_user in existing_users_list:
+                    if existing_user.get('userName') not in kc_usernames:
+                        users_to_delete.append({
+                            "username": existing_user.get('userName'),
+                            "id": existing_user.get('id')
+                        })
+
+            # Determine groups to delete if enabled
+            if self.settings.sync_delete_groups:
+                realm_prefix = f"{self.settings.keycloak_realm}-"
+                for display_name, scim_group in existing_groups_map.items():
+                    if display_name.startswith(realm_prefix) and display_name not in synced_group_names:
+                        groups_to_delete.append({
+                            "displayName": display_name,
+                            "id": scim_group.get('id')
+                        })
+
             return {
                 "users_to_create": users_to_create,
                 "users_to_update": users_to_update,
+                "users_to_delete": users_to_delete,
                 "groups_to_sync": [
                     {
-                        "name": g.name, 
+                        "name": g.name,
                         "path": g.path,
                         "scim_name": f"{self.settings.keycloak_realm}-{parent_group_map.get(g.id).name if g.id in parent_group_map else 'unknown'}-{g.name}"
                     } for g in kc_groups
                 ],
+                "groups_to_delete": groups_to_delete,
                 "total_filtered_users": len(kc_users),
                 "total_scim_users": len(existing_users_list),
                 "total_filtered_groups": len(kc_groups),
-                "vcenter_filter": self.settings.vcenter_name
+                "total_scim_groups": len(existing_groups_list),
+                "vcenter_filter": self.settings.vcenter_name,
+                "delete_users_enabled": self.settings.sync_delete_users,
+                "delete_groups_enabled": self.settings.sync_delete_groups
             }
         except Exception as e:
             logger.error(f"Failed to generate sync preview: {e}")
@@ -259,12 +297,12 @@ class SyncService:
             logger.info(f"Fetching groups filtered by vcenter_name: {self.settings.vcenter_name}...")
             kc_groups, parent_group_map = await self._get_filtered_groups_with_subgroups()
             logger.info(f"Found {len(kc_groups)} subgroups to sync")
-            
+
             # Get existing groups from SCIM
             logger.info("Fetching existing groups from SCIM endpoint...")
             existing_groups_list = await self.scim_client.list_all_groups()
             existing_groups_map = {g.get('displayName'): g for g in existing_groups_list}
-            
+
             # Get all users from SCIM to map Keycloak IDs to SCIM IDs
             logger.info("Fetching users from SCIM for ID mapping...")
             scim_users = await self.scim_client.list_all_users()
@@ -275,15 +313,19 @@ class SyncService:
                 scim_id = user.get('id')
                 if external_id and scim_id:
                     kc_to_scim_user_map[external_id] = scim_id
-            
+
+            # Track which groups we've synced from Keycloak
+            synced_group_names = set()
+
             # For each subgroup, create or update it
             for kc_group in kc_groups:
                 try:
                     parent_group = parent_group_map.get(kc_group.id)
                     display_name = f"{self.settings.keycloak_realm}-{parent_group.name if parent_group else 'unknown'}-{kc_group.name}"
-                    
+                    synced_group_names.add(display_name)
+
                     existing_group = existing_groups_map.get(display_name)
-                    
+
                     if existing_group:
                         group_scim_id = existing_group.get('id')
                         logger.info(f"Group {display_name} already exists with ID {group_scim_id}")
@@ -298,12 +340,12 @@ class SyncService:
                         else:
                             self.sync_stats["errors"].append(f"Failed to create group {display_name}")
                             continue
-                    
+
                     # Now update group membership
                     if group_scim_id:
                         # Get members from Keycloak
                         kc_members = await self.keycloak_client.get_group_members(kc_group.id)
-                        
+
                         # Convert Keycloak user IDs to SCIM user IDs
                         scim_member_ids = []
                         for member in kc_members:
@@ -312,21 +354,51 @@ class SyncService:
                                 scim_member_ids.append(scim_id)
                             else:
                                 logger.warning(f"User {member.username} ({member.id}) not found in SCIM")
-                        
+
                         # Replace all group members (this handles add/remove in one operation)
                         success = await self.scim_client.replace_group_members(group_scim_id, scim_member_ids)
                         if success:
                             logger.info(f"Updated group {display_name} with {len(scim_member_ids)} members")
                         else:
                             self.sync_stats["errors"].append(f"Failed to update members for group {display_name}")
-                        
+
                 except Exception as e:
                     error_msg = f"Error syncing group {kc_group.name}: {str(e)}"
                     logger.error(error_msg)
                     self.sync_stats["errors"].append(error_msg)
-                    
+
+            # Handle group deletions (groups in SCIM that match naming convention but not in Keycloak)
+            if self.settings.sync_delete_groups:
+                # Parse the naming convention to identify groups to potentially delete
+                realm_prefix = f"{self.settings.keycloak_realm}-"
+
+                for display_name, scim_group in existing_groups_map.items():
+                    # Check if this group follows our naming convention
+                    if display_name.startswith(realm_prefix):
+                        # Check if this group was NOT synced from Keycloak
+                        if display_name not in synced_group_names:
+                            group_id = scim_group.get('id')
+                            if group_id:
+                                try:
+                                    success = await self.scim_client.delete_group(group_id)
+                                    if success:
+                                        self.sync_stats["groups_deleted"] += 1
+                                        logger.info(f"Deleted group {display_name} from SCIM endpoint")
+                                    else:
+                                        self.sync_stats["errors"].append(f"Failed to delete group {display_name}")
+                                except Exception as e:
+                                    error_msg = f"Error deleting group {display_name}: {str(e)}"
+                                    logger.error(error_msg)
+                                    self.sync_stats["errors"].append(error_msg)
+            else:
+                # Just log groups that would be deleted
+                realm_prefix = f"{self.settings.keycloak_realm}-"
+                for display_name, scim_group in existing_groups_map.items():
+                    if display_name.startswith(realm_prefix) and display_name not in synced_group_names:
+                        logger.info(f"Group {display_name} exists in SCIM endpoint but not in Keycloak (deletion disabled)")
+
             return self.sync_stats
-            
+
         except Exception as e:
             error_msg = f"Group sync failed: {str(e)}"
             logger.error(error_msg)

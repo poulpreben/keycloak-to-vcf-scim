@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     sync_interval_minutes: int = Field(default=60, description="Sync interval in minutes")
     sync_enabled: bool = Field(default=True, description="Enable automatic sync")
     sync_delete_users: bool = Field(default=False, description="Delete users in SCIM that are not in Keycloak filtered groups")
+    sync_delete_groups: bool = Field(default=False, description="Delete groups in SCIM that are not in Keycloak filtered groups")
     
     # API settings
     api_host: str = Field(default="0.0.0.0", description="API host")

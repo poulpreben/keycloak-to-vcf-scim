@@ -300,6 +300,7 @@ async def get_config(settings: Settings = Depends(get_settings)) -> Dict[str, An
         "sync_interval_minutes": settings.sync_interval_minutes,
         "sync_enabled": settings.sync_enabled,
         "sync_delete_users": settings.sync_delete_users,
+        "sync_delete_groups": settings.sync_delete_groups,
         "api_host": settings.api_host,
         "api_port": settings.api_port,
         "api_prefix": settings.api_prefix,
